@@ -7,8 +7,14 @@ This project focuses on analyzing Yelp reviews for restaurants to classify them 
 
 **Key aspects of the project:**
 **Exploratory Data Analysis (EDA):** We explore the distribution of reviews and star ratings, and look into how well the ratings align with the sentiments expressed in the review text.
+
 **Sentiment Lexicons:** We use well-known sentiment lexicons like Bing Liu, NRC, and AFINN to identify words that indicate positive or negative sentiment in the reviews.
+
 **Machine Learning Models:** We build several models, including Naïve Bayes, Logistic Regression, and Random Forest, to predict the sentiment of the reviews based on the words used in them.
+
 **Text Processing:** The text data is cleaned and preprocessed using tokenization, stopword removal, and other text mining techniques to prepare it for model training.
+
 **Model Evaluation:** The models are evaluated using various performance metrics like accuracy, precision, recall, and F1-score to understand how well they predict sentiment.
+
+
 Overall, this project demonstrates how text mining and machine learning can be applied to understand the sentiment behind user reviews and make sense of large amounts of unstructured data.
