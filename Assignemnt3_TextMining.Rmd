@@ -1,0 +1,1363 @@
+
+#load libraries
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(caret)
+library(xgboost)
+library(tidytext)
+library(pROC)
+
+```
+
+#loading dataset from local
+
+```{r}
+
+resReviewsData <- read.csv2("/Users/dhritisood/Downloads/restaurantReviewsSamplelatest.csv")
+head(resReviewsData)
+
+dim(resReviewsData)
+
+
+```
+
+#Q1 A)
+
+```{r}
+# Calculate the total number of reviews and restaurants
+num_reviews <- nrow(resReviewsData)
+num_restaurants <- n_distinct(resReviewsData$business_id)
+
+# Display results
+cat("Number of reviews:", num_reviews, "\n")
+cat("Number of unique restaurants:", num_restaurants, "\n")
+
+# Check distribution of reviews across restaurants
+review_distribution <- resReviewsData %>%
+  group_by(business_id) %>%
+  summarise(num_reviews = n()) %>%
+  arrange(desc(num_reviews))
+
+# Display summary statistics for distribution
+summary(review_distribution$num_reviews)
+
+# Plot distribution of reviews across restaurants
+library(ggplot2)
+A
+ggplot(review_distribution, aes(x = num_reviews)) +
+  geom_histogram(binwidth = 10, fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(
+    title = "Distribution of Reviews Across Restaurants",
+    subtitle = "Histogram showing the frequency of reviews per restaurant",
+    x = "Number of Reviews",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 15) 
+#number of reviews by start-rating
+resReviewsData %>% group_by(stars) %>% count()
+```
+
+#Q1 B)
+
+```{r}
+
+avg_review_stars <- reviews %>%
+  group_by(business_id) %>%
+  summarise(avgReviewStars = mean(reviewStars, na.rm = TRUE))
+
+# Merge average review stars with business stars
+combined_data <- businesses %>%
+  inner_join(avg_review_stars, by = "business_id")
+
+# Compute correlation between `avgReviewStars` and `businessStars`
+correlation <- cor(combined_data$avgReviewStars, combined_data$businessStars, use = "complete.obs")
+cat("Correlation between average review stars and business stars:", correlation, "\n")
+
+# Visualize the relationship
+ggplot(combined_data, aes(x = avgReviewStars, y = businessStars)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(title = "Relationship between Average Review Stars and Business Stars",
+       x = "Average Review Stars",
+       y = "Business Stars") +
+  theme_minimal()
+
+```
+
+#Q1 C)
+
+```{r}
+
+#Check words by star rating of reviews
+rrTokens %>% group_by(stars) %>% count(word, sort=TRUE)
+#or...
+rrTokens %>% group_by(stars) %>% count(word, sort=TRUE) %>% arrange(desc(stars)) %>% view()
+
+#proportion of word occurrence by star ratings
+ws <- rrTokens %>% group_by(stars) %>% count(word, sort=TRUE)
+ws<-  ws %>% group_by(stars) %>% mutate(prop=n/sum(n))
+
+#check the proportion of 'love' among reviews with 1,2,..5 stars 
+ws %>% filter(word=='love')
+
+#what are the most commonly used words by stars rating
+ws %>% group_by(stars) %>% arrange(stars, desc(prop)) %>% view()
+
+#to see the top 20 words by star ratings
+ws %>% group_by(stars) %>% arrange(stars, desc(prop)) %>% filter(row_number()<=20) %>% view()
+
+#To plot this
+ws %>% group_by(stars) %>% arrange(stars, desc(prop)) %>% filter(row_number()<=20) %>% ggplot(aes(word, prop))+geom_col()+coord_flip()+facet_wrap((~stars))
+
+#Or, separate plots by stars
+ws %>% filter(stars==1)  %>%  ggplot(aes(word, n)) + geom_col()+coord_flip()
+
+xx<- ws %>% group_by(word) %>% summarise(totWS=sum(stars*prop))
+
+#What are the 20 words with highest and lowerst star rating
+xx %>% top_n(20)
+xx %>% top_n(-20)
+
+#Classifying threshold for positive and negative star rating
+resReviewsData <-  resReviewsData %>% mutate(sentiment = ifelse(stars > 3, 1, 0))
+
+# Plot star rating distribution
+ggplot(resReviewsData, aes(x = stars, fill = factor(sentiment))) + geom_bar() + labs(title = "Star Ratings Distribution", x = "Stars", y = "Count", fill = "Sentiment")
+
+```
+
+#Q2
+
+```{r}
+
+# Tokenize the reviews
+rrTokens <- rrData %>% select(review_id, stars, text) %>% unnest_tokens(word, text)
+
+# Removing the stop words
+rrTokens <- rrTokens %>% anti_join(stop_words, by = "word")
+
+# Calculating the average star rating for each word
+word_ratings <- rrTokens %>% group_by(word) %>% summarize(avg_stars = mean(stars, na.rm = TRUE), word_count = n()) %>% arrange(desc(avg_stars))
+
+# Top 20 positive words
+positive_words <- word_ratings %>% filter(word_count > 10) %>% top_n(20, avg_stars)
+print("Top 20 positive word")
+positive_words
+
+# Top 20 negative words
+negative_words <- word_ratings %>% filter(word_count > 10) %>% top_n(-20, avg_stars)
+print("Top 20 negative word")
+negative_words
+
+```
+
+#Q3 A)
+
+```{r}
+#BING Dicctionary
+rrSenti_bing<- rrTokens %>% inner_join(get_sentiments("bing"), by="word")
+
+bing_word_count <- rrSenti_bing %>%
+  count(word, sort = TRUE)
+cat("Number of matching terms with Bing Liu dictionary:", nrow(bing_word_count), "\n")
+# NRC Dictionary
+rrSenti_nrc <- rrTokens %>%
+  inner_join(get_sentiments("nrc"), by = "word")
+nrc_word_count <- rrSenti_nrc %>%
+  distinct(word) %>%
+  nrow()
+cat("Number of distinct matching terms with NRC dictionary:", nrc_word_count, "\n")
+#AFINN Dictionary
+rrSenti_afinn <- rrTokens %>%
+  inner_join(get_sentiments("afinn"), by = "word")
+afinn_word_count <- rrSenti_afinn %>%
+  distinct(word) %>%
+  nrow()
+cat("Number of distinct matching terms with AFINN dictionary:", afinn_word_count, "\n")
+
+```
+
+#Q3 B)
+
+```{r}
+# Each dictionary contains a column `term` and `sentiment` (positive/negative)
+afinn_dict <- read.csv("afinn.csv")   # AFINN Dictionary
+nrc_dict <- read.csv("nrc.csv")       # NRC Dictionary
+bing_dict <- read.csv("bing.csv")     # Bing Dictionary
+
+#Find overlap in terms
+afinn_terms <- afinn_dict$term
+nrc_terms <- nrc_dict$term
+bing_terms <- bing_dict$term
+
+# Calculate intersections and unions
+overlap_afinn_nrc <- intersect(afinn_terms, nrc_terms)
+overlap_afinn_bing <- intersect(afinn_terms, bing_terms)
+overlap_nrc_bing <- intersect(nrc_terms, bing_terms)
+
+# Display overlap statistics
+cat("AFINN-NRC Overlap: ", length(overlap_afinn_nrc), "\n")
+cat("AFINN-Bing Overlap: ", length(overlap_afinn_bing), "\n")
+cat("NRC-Bing Overlap: ", length(overlap_nrc_bing), "\n")
+
+# Union statistics for total coverage
+union_afinn_nrc <- union(afinn_terms, nrc_terms)
+union_afinn_bing <- union(afinn_terms, bing_terms)
+union_nrc_bing <- union(nrc_terms, bing_terms)
+
+cat("AFINN-NRC Union: ", length(union_afinn_nrc), "\n")
+cat("AFINN-Bing Union: ", length(union_afinn_bing), "\n")
+cat("NRC-Bing Union: ", length(union_nrc_bing), "\n")
+
+# Coverage in review text
+# Assuming `reviews` is a data frame with a column `review_text`
+reviews$terms <- strsplit(tolower(reviews$review_text), "\\s+")  # Tokenize text
+
+afinn_matches <- sum(unlist(reviews$terms) %in% afinn_terms)
+nrc_matches <- sum(unlist(reviews$terms) %in% nrc_terms)
+bing_matches <- sum(unlist(reviews$terms) %in% bing_terms)
+
+cat("AFINN Coverage: ", afinn_matches, "\n")
+cat("NRC Coverage: ", nrc_matches, "\n")
+cat("Bing Coverage: ", bing_matches, "\n")
+
+# Choose the best dictionary
+# Combine statistics and compare overlap/coverage percentages
+coverage_data <- data.frame(
+  Dictionary = c("AFINN", "NRC", "Bing"),
+  Matches = c(afinn_matches, nrc_matches, bing_matches),
+  Coverage = c(
+    afinn_matches / length(afinn_terms),
+    nrc_matches / length(nrc_terms),
+    bing_matches / length(bing_terms)
+  )
+)
+
+print(coverage_data)
+
+```
+
+#Q3 C)
+
+```{r}
+
+# Load Sentiment Dictionaries
+bing <- get_sentiments("bing")   # Contains positive and negative words
+nrc <- get_sentiments("nrc")     # Includes various emotions and positive/negative labels
+afinn <- get_sentiments("afinn") # Words with scores from -5 to 5
+
+# Example Positive and Negative Words from Question 2
+positive_terms <- c("delicious", "excellent", "friendly", "fantastic", "amazing")
+negative_terms <- c("terrible", "horrible", "rude", "bad", "disgusting")
+
+# Match Positive Terms with Dictionaries
+positive_matches_bing <- positive_terms[positive_terms %in% bing$word]
+positive_matches_nrc <- positive_terms[positive_terms %in% nrc$word]
+positive_matches_afinn <- positive_terms[positive_terms %in% afinn$word]
+
+# Match Negative Terms with Dictionaries
+negative_matches_bing <- negative_terms[negative_terms %in% bing$word]
+negative_matches_nrc <- negative_terms[negative_terms %in% nrc$word]
+negative_matches_afinn <- negative_terms[negative_terms %in% afinn$word]
+
+# Combine Results into a Data Frame
+dictionary_matches <- tibble(
+  Term = c(positive_terms, negative_terms),
+  Type = c(rep("Positive", length(positive_terms)), rep("Negative", length(negative_terms))),
+  Bing = Term %in% bing$word,
+  NRC = Term %in% nrc$word,
+  AFINN = Term %in% afinn$word
+)
+
+# View the Matching Results
+print(dictionary_matches)
+
+# Count Matches for Each Dictionary
+matches_summary <- dictionary_matches %>%
+  summarise(
+    Bing_Positive = sum(Type == "Positive" & Bing),
+    Bing_Negative = sum(Type == "Negative" & Bing),
+    NRC_Positive = sum(Type == "Positive" & NRC),
+    NRC_Negative = sum(Type == "Negative" & NRC),
+    AFINN_Positive = sum(Type == "Positive" & AFINN),
+    AFINN_Negative = sum(Type == "Negative" & AFINN)
+  )
+
+# Display the Summary
+print(matches_summary)
+```
+
+# Q4 A)
+
+```{r}
+
+# Aggregate scores for BING dictionary
+revSenti_bing <- rrSenti_bing %>% group_by(review_id, stars) %>% summarise(nwords=n(),posSum=sum(sentiment=='positive'), negSum=sum(sentiment=='negative'))
+
+revSenti_bing<- revSenti_bing %>% mutate(posProp=posSum/nwords, negProp=negSum/nwords)
+revSenti_bing<- revSenti_bing %>% mutate(sentiScore=posProp-negProp)
+
+#Do review start ratings correspond to the the positive/negative sentiment words
+revSenti_bing %>% group_by(stars) %>% summarise(avgPos=mean(posProp), avgNeg=mean(negProp), avgSentiSc=mean(sentiScore))
+# Aggregate scores for NRC dictionary
+revSenti_nrc <- rrSenti_nrc %>%
+  group_by(review_id, stars) %>%
+  summarise(nwords = n(),
+            posSum = sum(sentiment %in% c('positive', 'joy', 'anticipation', 'trust')),
+            negSum = sum(sentiment %in% c('anger', 'disgust', 'fear', 'sadness', 'negative'))) %>%
+  mutate(posProp = posSum / nwords,
+         negProp = negSum / nwords,
+         sentiScore = posProp - negProp)
+#with AFINN dictionary words....following similar steps as above, but noting that AFINN assigns negative to positive sentiment value for words matching the dictionary
+rrSenti_afinn<- rrTokens %>% inner_join(get_sentiments("afinn"), by="word")
+
+revSenti_afinn <- rrSenti_afinn %>% group_by(review_id, stars) %>% summarise(nwords=n(), sentiSum =sum(value))
+
+revSenti_afinn %>% group_by(stars) %>% summarise(avgLen=mean(nwords), avgSenti=mean(sentiSum))
+
+```
+
+#Q5 Lasso Regression
+
+```{r}
+# ------------ LASSO REGRESSION -> BING ------------
+
+#load libraries
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(caret)
+# Load the dataset
+data <- read.csv2("/Users/dhritisood/Downloads/restaurantReviewsSamplelatest.csv")
+head(data)
+
+dim(data)
+
+data <- data %>% rename(stars = starsReview)
+
+# Tokenize the text data
+colnames(data)
+tokenized_reviews <- data %>%
+  unnest_tokens(word, text)
+
+# Load Bing sentiment lexicon
+bing <- get_sentiments("bing")
+
+# Compute Bing sentiment scores
+bing_sentiment_scores <- tokenized_reviews %>%
+  left_join(bing, by = "word", relationship = "many-to-many") %>%
+  group_by(review_id) %>%
+  summarize(
+    bing_sentiment = sum(sentiment == "positive", na.rm = TRUE) -
+      sum(sentiment == "negative", na.rm = TRUE)
+  )
+
+# Merge Bing sentiment scores with the original data
+data <- data %>%
+  left_join(bing_sentiment_scores, by = "review_id") %>%
+  mutate(bing_sentiment = replace_na(bing_sentiment, 0))  # Replace NAs with 0
+
+# Prepare data for regression
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, bing_sentiment, useful, cool, funny) %>%
+  na.omit()
+
+# Split data into training and testing sets
+set.seed(123)
+train_index <- createDataPartition(model_data$positive_review, p = 0.7, list = FALSE)
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+# Standardize predictors
+x_train <- model.matrix(positive_review ~ ., train_data)[, -1]
+y_train <- as.numeric(as.character(train_data$positive_review))  # Convert factor to numeric
+x_test <- model.matrix(positive_review ~ ., test_data)[, -1]
+y_test <- as.numeric(as.character(test_data$positive_review))
+
+# Fit Lasso regression model
+lasso_model <- cv.glmnet(x_train, y_train, alpha = 1, family = "binomial")
+best_lambda <- lasso_model$lambda.min
+
+# Coefficients of the best model
+cat("Coefficients of the best model:\n")
+print(coef(lasso_model, s = best_lambda))
+
+# Predict probabilities on training and test sets
+train_predicted_prob <- predict(lasso_model, s = best_lambda, newx = x_train, type = "response")
+test_predicted_prob <- predict(lasso_model, s = best_lambda, newx = x_test, type = "response")
+
+# Threshold for classification (default is 0.5)
+threshold <- 0.5
+train_predicted_class <- ifelse(train_predicted_prob >= threshold, 1, 0)
+test_predicted_class <- ifelse(test_predicted_prob >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix <- confusionMatrix(as.factor(train_predicted_class), as.factor(y_train))
+print(train_confusion_matrix)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix <- confusionMatrix(as.factor(test_predicted_class), as.factor(y_test))
+print(test_confusion_matrix)
+
+# ROC Curve and AUC for Training Data
+# Convert predicted probabilities to numeric vectors
+train_predicted_prob <- as.numeric(train_predicted_prob)
+test_predicted_prob <- as.numeric(test_predicted_prob)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve <- roc(y_train, train_predicted_prob)
+train_auc <- auc(train_roc_curve)
+cat("\nAUC for Training Data:", train_auc, "\n")
+plot(train_roc_curve, col = "blue", main = "ROC Curve for Training Data")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve <- roc(y_test, test_predicted_prob)
+test_auc <- auc(test_roc_curve)
+cat("\nAUC for Test Data:", test_auc, "\n")
+plot(test_roc_curve, col = "red", main = "ROC Curve for Test Data")
+
+
+# ------------ LASSO REGRESSION -> AFINN------------
+
+# Load AFINN sentiment lexicon
+afinn <- get_sentiments("afinn")
+
+# Compute AFINN sentiment scores
+afinn_sentiment_scores <- tokenized_reviews %>%
+  left_join(afinn, by = "word") %>%
+  group_by(review_id) %>%
+  summarize(afinn_sentiment = sum(value, na.rm = TRUE)) 
+
+# Merge AFINN sentiment scores with the original data
+data <- data %>%
+  left_join(afinn_sentiment_scores, by = "review_id") %>%
+  mutate(afinn_sentiment = replace_na(afinn_sentiment, 0))
+
+# Prepare data for regression
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data_af <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, afinn_sentiment, useful, cool, funny) %>%
+  na.omit()
+# Split data into training and testing sets
+set.seed(123)
+train_index <- createDataPartition(model_data_af$positive_review, p = 0.7, list = FALSE)
+train_data_af <- model_data_af[train_index, ]
+test_data_af <- model_data_af[-train_index, ]
+
+# Standardize predictors
+x_train_af <- model.matrix(positive_review ~ ., train_data_af)[, -1]
+y_train_af <- as.numeric(as.character(train_data_af$positive_review))
+x_test_af <- model.matrix(positive_review ~ ., test_data_af)[, -1]
+y_test_af <- as.numeric(as.character(test_data_af$positive_review))
+
+# Fit Lasso regression model
+lasso_model_af <- cv.glmnet(x_train_af, y_train_af, alpha = 1, family = "binomial")
+best_lambda <- lasso_model_af$lambda.min
+
+# Coefficients of the best model
+cat("Coefficients of the best model:\n")
+print(coef(lasso_model_af, s = best_lambda))
+
+# Predict probabilities on training and test sets
+train_predicted_prob_af <- as.numeric(predict(lasso_model_af, s = best_lambda, newx = x_train_af, type = "response"))
+test_predicted_prob_af <- as.numeric(predict(lasso_model_af, s = best_lambda, newx = x_test_af, type = "response"))
+# Threshold for classification (default is 0.5)
+threshold <- 0.5
+train_predicted_class_af <- ifelse(train_predicted_prob_af >= threshold, 1, 0)
+test_predicted_class_af <- ifelse(test_predicted_prob_af >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix_af <- confusionMatrix(as.factor(train_predicted_class_af), as.factor(y_train_af))
+print(train_confusion_matrix_af)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix_af <- confusionMatrix(as.factor(test_predicted_class_af), as.factor(y_test_af))
+print(test_confusion_matrix_af)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve_af <- roc(y_train_af, train_predicted_prob_af)
+train_auc_af <- auc(train_roc_curve_af)
+cat("\nAUC for Training Data:", train_auc_af, "\n")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve_af <- roc(y_test_af, test_predicted_prob_af)
+test_auc_af <- auc(test_roc_curve_af)
+cat("\nAUC for Test Data:", test_auc_af, "\n")
+plot(test_roc_curve_af, col = "red", main = "ROC Curve for Test Data")
+
+# ------------ LASSO REGRESSION -> NRC------------
+
+#-------------- NRC SENTIMENT-------------
+
+# Load NRC sentiment lexicon
+nrc <- get_sentiments("nrc")
+
+# Merge and compute NRC sentiment scores
+nrc_sentiment_scores <- tokenized_reviews %>%
+  left_join(nrc, by = "word", relationship = "many-to-many") %>%
+  group_by(review_id) %>%
+  summarize(
+    nrc_positive = sum(sentiment == "positive", na.rm = TRUE),
+    nrc_negative = sum(sentiment == "negative", na.rm = TRUE),
+    nrc_joy = sum(sentiment == "joy", na.rm = TRUE),
+    nrc_sadness = sum(sentiment == "sadness", na.rm = TRUE),
+    nrc_anger = sum(sentiment == "anger", na.rm = TRUE),
+    nrc_fear = sum(sentiment == "fear", na.rm = TRUE)
+  ) %>%
+  mutate(
+    nrc_sentiment = nrc_positive - nrc_negative  # Aggregate score (positive - negative)
+  )
+# Merge NRC sentiment scores with the original data
+data <- data %>%
+  left_join(nrc_sentiment_scores, by = "review_id") %>%
+  mutate(across(starts_with("nrc_"), ~ replace_na(., 0)))
+
+# Prepare data for regression
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data_nrc <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, nrc_sentiment, nrc_positive, nrc_negative, nrc_joy, nrc_sadness, nrc_anger, nrc_fear, useful, cool, funny) %>%
+  na.omit()
+
+# Split data into training and testing sets
+set.seed(123)
+train_index_nrc <- createDataPartition(model_data_nrc$positive_review, p = 0.8, list = FALSE)
+train_data_nrc <- model_data_nrc[train_index_nrc, ]
+test_data_nrc <- model_data_nrc[-train_index_nrc, ]
+
+# Standardize predictors
+x_train_nrc <- model.matrix(positive_review ~ ., train_data_nrc)[, -1]
+y_train_nrc <- as.numeric(as.character(train_data_nrc$positive_review))
+x_test_nrc <- model.matrix(positive_review ~ ., test_data_nrc)[, -1]
+y_test_nrc <- as.numeric(as.character(test_data_nrc$positive_review))
+
+# Fit Lasso regression model
+lasso_model_nrc <- cv.glmnet(x_train_nrc, y_train_nrc, alpha = 1, family = "binomial")
+best_lambda_nrc <- lasso_model_nrc$lambda.min
+
+# Coefficients of the best model
+cat("Coefficients of the best model:\n")
+print(coef(lasso_model_nrc, s = best_lambda_nrc))
+
+# Predict probabilities on training and test sets
+train_predicted_prob_nrc <- as.numeric(predict(lasso_model_nrc, s = best_lambda_nrc, newx = x_train_nrc, type = "response"))
+test_predicted_prob_nrc <- as.numeric(predict(lasso_model_nrc, s = best_lambda_nrc, newx = x_test_nrc, type = "response"))
+
+# Threshold for classification (default is 0.5)
+threshold <- 0.5
+train_predicted_class_nrc <- ifelse(train_predicted_prob_nrc >= threshold, 1, 0)
+test_predicted_class_nrc <- ifelse(test_predicted_prob_nrc >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix_nrc <- confusionMatrix(as.factor(train_predicted_class_nrc), as.factor(y_train_nrc))
+print(train_confusion_matrix_nrc)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix_nrc <- confusionMatrix(as.factor(test_predicted_class_nrc), as.factor(y_test_nrc))
+print(test_confusion_matrix_nrc)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve_nrc <- roc(y_train_nrc, train_predicted_prob_nrc)
+train_auc_nrc <- auc(train_roc_curve_nrc)
+cat("\nAUC for Training Data:", train_auc_nrc, "\n")
+plot(train_roc_curve_nrc, col = "blue", main = "ROC Curve for Training Data")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve_nrc <- roc(y_test_nrc, test_predicted_prob_nrc)
+test_auc_nrc <- auc(test_roc_curve_nrc)
+cat("\nAUC for Test Data:", test_auc_nrc, "\n")
+plot(test_roc_curve_nrc, col = "red", main = "ROC Curve for Test Data")
+
+```
+
+#Q5 XGB
+
+```{r}
+
+# ------------ XGB - COMBINED-----------
+
+
+
+# Load the dataset
+data <- read.csv2("/Users/dhritisood/Downloads/restaurantReviewsSamplelatest.csv")
+head(data)
+dim(data)
+
+data <- data %>% rename(stars = starsReview)
+
+# Tokenize the text data
+colnames(data)
+tokenized_reviews <- data %>%
+  unnest_tokens(word, text)
+
+# Load sentiment lexicons
+bing <- get_sentiments("bing")
+afinn <- get_sentiments("afinn")
+nrc <- get_sentiments("nrc")
+
+# Compute Bing sentiment scores
+bing_sentiment_scores <- tokenized_reviews %>%
+  left_join(bing, by = "word", relationship = "many-to-many") %>%
+  group_by(review_id) %>%
+  summarize(bing_sentiment = sum(sentiment == "positive", na.rm = TRUE) -
+              sum(sentiment == "negative", na.rm = TRUE))
+
+# Compute AFINN sentiment scores
+afinn_sentiment_scores <- tokenized_reviews %>%
+  left_join(afinn, by = "word") %>%
+  group_by(review_id) %>%
+  summarize(afinn_sentiment = sum(value, na.rm = TRUE))  # 'v
+
+# Compute NRC sentiment scores
+nrc_sentiment_scores <- tokenized_reviews %>%
+  left_join(nrc, by = "word", relationship = "many-to-many") %>%
+  group_by(review_id) %>%
+  summarize(
+    nrc_positive = sum(sentiment == "positive", na.rm = TRUE),
+    nrc_negative = sum(sentiment == "negative", na.rm = TRUE),
+    nrc_joy = sum(sentiment == "joy", na.rm = TRUE),
+    nrc_sadness = sum(sentiment == "sadness", na.rm = TRUE),
+    nrc_anger = sum(sentiment == "anger", na.rm = TRUE),
+    nrc_fear = sum(sentiment == "fear", na.rm = TRUE),
+    nrc_trust = sum(sentiment == "trust", na.rm = TRUE),
+    nrc_surprise = sum(sentiment == "surprise", na.rm = TRUE),
+    nrc_disgust = sum(sentiment == "disgust", na.rm = TRUE),
+    nrc_anticipation = sum(sentiment == "anticipation", na.rm = TRUE)
+  ) %>%
+  mutate(nrc_sentiment = nrc_positive - nrc_negative)
+
+# Combine all sentiment scores into a single dataset
+sentiment_scores <- bing_sentiment_scores %>%
+  left_join(afinn_sentiment_scores, by = "review_id") %>%
+  left_join(nrc_sentiment_scores, by = "review_id")
+
+# Merge sentiment scores with the original dataset
+data <- data %>%
+  left_join(sentiment_scores, by = "review_id") %>%
+  mutate(across(starts_with("bing"), ~ replace_na(., 0))) %>%
+  mutate(across(starts_with("afinn"), ~ replace_na(., 0))) %>%
+  mutate(across(starts_with("nrc_"), ~ replace_na(., 0)))
+
+# Prepare data for classification
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, bing_sentiment, afinn_sentiment, nrc_positive, nrc_negative, nrc_joy, 
+         nrc_sadness, nrc_anger, nrc_fear, nrc_trust, nrc_surprise, nrc_disgust, 
+         nrc_anticipation, useful, cool, funny) %>%
+  na.omit()
+
+# Split data into training and testing sets
+set.seed(123)
+train_index <- createDataPartition(model_data$positive_review, p = 0.7, list = FALSE)
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+# Convert data into XGBoost format
+x_train <- model.matrix(positive_review ~ ., train_data)[, -1]
+y_train <- as.numeric(as.character(train_data$positive_review))
+x_test <- model.matrix(positive_review ~ ., test_data)[, -1]
+y_test <- as.numeric(as.character(test_data$positive_review))
+
+dtrain <- xgb.DMatrix(data = x_train, label = y_train)
+dtest <- xgb.DMatrix(data = x_test, label = y_test)
+
+# Train the XGBoost model
+xgb_params <- list(
+  objective = "binary:logistic",  # Binary classification
+  eval_metric = "auc",           # Evaluation metric
+  max_depth = 6,                 # Tree depth
+  eta = 0.1,                     # Learning rate
+  gamma = 0,                     # Minimum loss reduction
+  colsample_bytree = 0.8,        # Subsample ratio of columns
+  subsample = 0.8                # Subsample ratio of rows
+)
+
+set.seed(123)
+xgb_model <- xgb.train(
+  params = xgb_params,
+  data = dtrain,
+  nrounds = 100,                # Number of boosting rounds
+  watchlist = list(train = dtrain, test = dtest),
+  verbose = 1
+)
+
+# Predict probabilities on training and test sets
+train_predicted_prob <- predict(xgb_model, dtrain)
+test_predicted_prob <- predict(xgb_model, dtest)
+
+threshold <- 0.5
+train_predicted_class <- ifelse(train_predicted_prob >= threshold, 1, 0)
+test_predicted_class <- ifelse(test_predicted_prob >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix <- confusionMatrix(as.factor(train_predicted_class), as.factor(y_train))
+print(train_confusion_matrix)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix <- confusionMatrix(as.factor(test_predicted_class), as.factor(y_test))
+print(test_confusion_matrix)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve <- roc(y_train, train_predicted_prob)
+train_auc <- auc(train_roc_curve)
+cat("\nAUC for Training Data:", train_auc, "\n")
+plot(train_roc_curve, col = "blue", main = "ROC Curve for Training Data")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve <- roc(y_test, test_predicted_prob)
+test_auc <- auc(test_roc_curve)
+cat("\nAUC for Test Data:", test_auc, "\n")
+plot(test_roc_curve, col = "red", main = "ROC Curve for Test Data")
+
+
+
+#load libraries
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(caret)
+library(xgboost)
+library(tidytext)
+library(pROC)
+# Load the dataset
+data <- read.csv2("/Users/dhritisood/Downloads/restaurantReviewsSamplelatest.csv")
+head(data)
+dim(data)
+
+data <- data %>% rename(stars = starsReview)
+
+# Tokenize the text data
+tokenized_reviews <- data %>%
+  unnest_tokens(word, text)
+  
+# Load Bing sentiment lexicon
+bing <- get_sentiments("bing")
+
+# Compute Bing sentiment scores
+bing_sentiment_scores <- tokenized_reviews %>%
+  left_join(bing, by = "word", relationship = "many-to-many") %>%
+  group_by(review_id) %>%
+  summarize(bing_sentiment = sum(sentiment == "positive", na.rm = TRUE) -
+                              sum(sentiment == "negative", na.rm = TRUE))
+                              
+# Merge Bing sentiment scores with the original dataset
+data <- data %>%
+  left_join(bing_sentiment_scores, by = "review_id") %>%
+  mutate(bing_sentiment = replace_na(bing_sentiment, 0))
+  
+# Prepare data for classification
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data_bing <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, bing_sentiment, useful, cool, funny) %>%
+  na.omit()
+
+# Split data into training and testing sets
+set.seed(123)
+train_index_bing <- createDataPartition(model_data_bing$positive_review, p = 0.8, list = FALSE)
+train_data_bing <- model_data_bing[train_index_bing, ]
+test_data_bing <- model_data_bing[-train_index_bing, ]
+
+# Convert data into XGBoost format
+x_train_bing <- model.matrix(positive_review ~ ., train_data_bing)[, -1]
+y_train_bing <- as.numeric(as.character(train_data_bing$positive_review))
+x_test_bing <- model.matrix(positive_review ~ ., test_data_bing)[, -1]
+y_test_bing <- as.numeric(as.character(test_data_bing$positive_review))
+
+dtrain_bing <- xgb.DMatrix(data = x_train_bing, label = y_train_bing)
+dtest_bing <- xgb.DMatrix(data = x_test_bing, label = y_test_bing)
+
+# Train the XGBoost model
+xgb_params_bing <- list(
+  objective = "binary:logistic",  # Binary classification
+  eval_metric = "auc",           # Evaluation metric
+  max_depth = 6,                 # Tree depth
+  eta = 0.1,                     # Learning rate
+  gamma = 0,                     # Minimum loss reduction
+  colsample_bytree = 0.8,        # Subsample ratio of columns
+  subsample = 0.8                # Subsample ratio of rows
+)
+
+set.seed(123)
+xgb_model_bing <- xgb.train(
+  params = xgb_params_bing,
+  data = dtrain_bing,
+  nrounds = 100,                # Number of boosting rounds
+  watchlist = list(train = dtrain_bing, test = dtest_bing),
+  verbose = 1
+)
+
+# Predict probabilities on training and test sets
+train_predicted_prob_bing <- predict(xgb_model_bing, dtrain_bing)
+test_predicted_prob_bing <- predict(xgb_model_bing, dtest_bing)
+
+# Threshold for classification (default is 0.5)
+threshold <- 0.5
+train_predicted_class_bing <- ifelse(train_predicted_prob_bing >= threshold, 1, 0)
+test_predicted_class_bing <- ifelse(test_predicted_prob_bing >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix_bing <- confusionMatrix(as.factor(train_predicted_class_bing), as.factor(y_train_bing))
+print(train_confusion_matrix_bing)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix_bing <- confusionMatrix(as.factor(test_predicted_class_bing), as.factor(y_test_bing))
+print(test_confusion_matrix_bing)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve_bing <- roc(y_train_bing, train_predicted_prob_bing)
+train_auc_bing <- auc(train_roc_curve_bing)
+cat("\nAUC for Training Data:", train_auc_bing, "\n")
+plot(train_roc_curve_bing, col = "blue", main = "ROC Curve for Training Data")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve_bing <- roc(y_test_bing, test_predicted_prob_bing)
+test_auc_bing <- auc(test_roc_curve_bing)
+cat("\nAUC for Test Data:", test_auc_bing, "\n")
+plot(test_roc_curve_bing, col = "red", main = "ROC Curve for Test Data")
+
+
+#----------------NRC -----------------------
+
+nrc <- get_sentiments("nrc")
+
+# Compute NRC sentiment scores
+nrc_sentiment_scores <- tokenized_reviews %>%
+  left_join(nrc, by = "word", relationship = "many-to-many") %>%
+  group_by(review_id) %>%
+  summarize(
+    nrc_positive = sum(sentiment == "positive", na.rm = TRUE),
+    nrc_negative = sum(sentiment == "negative", na.rm = TRUE),
+    nrc_joy = sum(sentiment == "joy", na.rm = TRUE),
+    nrc_sadness = sum(sentiment == "sadness", na.rm = TRUE),
+    nrc_anger = sum(sentiment == "anger", na.rm = TRUE),
+    nrc_fear = sum(sentiment == "fear", na.rm = TRUE),
+    nrc_trust = sum(sentiment == "trust", na.rm = TRUE),
+    nrc_surprise = sum(sentiment == "surprise", na.rm = TRUE),
+    nrc_disgust = sum(sentiment == "disgust", na.rm = TRUE),
+    nrc_anticipation = sum(sentiment == "anticipation", na.rm = TRUE)
+  ) %>%
+  mutate(nrc_sentiment = nrc_positive - nrc_negative)  # Aggregate score (positive - negative)
+  
+# Merge NRC sentiment scores with the original dataset
+data <- data %>%
+  left_join(nrc_sentiment_scores, by = "review_id") %>%
+  mutate(across(starts_with("nrc_"), ~ replace_na(., 0)))  # Replace NAs with 0
+
+# Prepare data for classification
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data_nrc <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, nrc_positive, nrc_negative, nrc_joy, nrc_sadness, nrc_anger, 
+         nrc_fear, nrc_trust, nrc_surprise, nrc_disgust, nrc_anticipation) %>%
+  na.omit()
+  
+# Split data into training and testing sets
+set.seed(123)
+train_index_nrc <- createDataPartition(model_data_nrc$positive_review, p = 0.8, list = FALSE)
+train_data_nrc <- model_data_nrc[train_index_nrc, ]
+test_data_nrc <- model_data_nrc[-train_index_nrc, ]
+
+# Convert data into XGBoost format
+x_train_nrc <- model.matrix(positive_review ~ ., train_data_nrc)[, -1]
+y_train_nrc <- as.numeric(as.character(train_data_nrc$positive_review))
+x_test_nrc <- model.matrix(positive_review ~ ., test_data_nrc)[, -1]
+y_test_nrc <- as.numeric(as.character(test_data_nrc$positive_review))
+
+dtrain_nrc <- xgb.DMatrix(data = x_train_nrc, label = y_train_nrc)
+dtest_nrc <- xgb.DMatrix(data = x_test_nrc, label = y_test_nrc)
+
+# Train the XGBoost model
+xgb_params_nrc <- list(
+  objective = "binary:logistic",  # Binary classification
+  eval_metric = "auc",           # Evaluation metric
+  max_depth = 6,                 # Tree depth
+  eta = 0.1,                     # Learning rate
+  gamma = 0,                     # Minimum loss reduction
+  colsample_bytree = 0.8,        # Subsample ratio of columns
+  subsample = 0.8                # Subsample ratio of rows
+)
+
+set.seed(123)
+xgb_model_nrc <- xgb.train(
+  params = xgb_params_nrc,
+  data = dtrain_nrc,
+  nrounds = 100,                # Number of boosting rounds
+  watchlist = list(train = dtrain_nrc, test = dtest_nrc),
+  verbose = 1
+)
+
+# Predict probabilities on training and test sets
+train_predicted_prob_nrc <- predict(xgb_model_nrc, dtrain_nrc)
+test_predicted_prob_nrc <- predict(xgb_model_nrc, dtest_nrc)
+
+# Threshold for classification (default is 0.5)
+threshold <- 0.5
+train_predicted_class_nrc <- ifelse(train_predicted_prob_nrc >= threshold, 1, 0)
+test_predicted_class_nrc <- ifelse(test_predicted_prob_nrc >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix_nrc <- confusionMatrix(as.factor(train_predicted_class_nrc), as.factor(y_train_nrc))
+print(train_confusion_matrix_nrc)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix_nrc <- confusionMatrix(as.factor(test_predicted_class_nrc), as.factor(y_test_nrc))
+print(test_confusion_matrix_nrc)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve_nrc <- roc(y_train_nrc, train_predicted_prob_nrc)
+train_auc_nrc <- auc(train_roc_curve_nrc)
+cat("\nAUC for Training Data:", train_auc_nrc, "\n")
+plot(train_roc_curve_nrc, col = "blue", main = "ROC Curve for Training Data")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve_nrc <- roc(y_test_nrc, test_predicted_prob_nrc)
+test_auc_nrc <- auc(test_roc_curve_nrc)
+cat("\nAUC for Test Data:", test_auc_nrc, "\n")
+plot(test_roc_curve_nrc, col = "red", main = "ROC Curve for Test Data")
+
+
+#-------------- AFINN -------------------------
+
+afinn <- get_sentiments("afinn")
+
+# Compute AFINN sentiment scores
+afinn_sentiment_scores <- tokenized_reviews %>%
+  left_join(afinn, by = "word") %>%
+  group_by(review_id) %>%
+  summarize(afinn_sentiment = sum(value, na.rm = TRUE))  
+
+# Merge AFINN sentiment scores with the original dataset
+data <- data %>%
+  left_join(afinn_sentiment_scores, by = "review_id") %>%
+  mutate(afinn_sentiment = replace_na(afinn_sentiment, 0))
+
+# Prepare data for classification
+# Assuming binary classification: Predict if the review has 4+ stars (positive sentiment)
+model_data_af <- data %>%
+  mutate(positive_review = as.factor(ifelse(stars >= 4, 1, 0))) %>%
+  select(positive_review, afinn_sentiment, useful, cool, funny) %>%
+  na.omit()
+  
+# Split data into training and testing sets
+set.seed(123)
+train_index_af <- createDataPartition(model_data_af$positive_review, p = 0.8, list = FALSE)
+train_data_af <- model_data_af[train_index_af, ]
+test_data_af <- model_data_af[-train_index_af, ]
+
+# Convert data into XGBoost format
+x_train_af <- model.matrix(positive_review ~ ., train_data_af)[, -1]
+y_train_af <- as.numeric(as.character(train_data_af$positive_review))
+x_test_af <- model.matrix(positive_review ~ ., test_data_af)[, -1]
+y_test_af <- as.numeric(as.character(test_data_af$positive_review))
+
+dtrain_af <- xgb.DMatrix(data = x_train_af, label = y_train_af)
+dtest_af <- xgb.DMatrix(data = x_test_af, label = y_test_af)
+
+# Train the XGBoost model
+xgb_params_af <- list(
+  objective = "binary:logistic",  # Binary classification
+  eval_metric = "auc",           # Evaluation metric
+  max_depth = 6,                 # Tree depth
+  eta = 0.1,                     # Learning rate
+  gamma = 0,                     # Minimum loss reduction
+  colsample_bytree = 0.8,        # Subsample ratio of columns
+  subsample = 0.8                # Subsample ratio of rows
+)
+
+set.seed(123)
+xgb_model_af <- xgb.train(
+  params = xgb_params_af,
+  data = dtrain_af,
+  nrounds = 100,                # Number of boosting rounds
+  watchlist = list(train = dtrain_af, test = dtest_af),
+  verbose = 1
+)
+
+# Predict probabilities on training and test sets
+train_predicted_prob_af <- predict(xgb_model_af, dtrain_af)
+test_predicted_prob_af <- predict(xgb_model_af, dtest_af)
+
+# Threshold for classification (default is 0.5)
+threshold <- 0.5
+train_predicted_class_af <- ifelse(train_predicted_prob_af >= threshold, 1, 0)
+test_predicted_class_af <- ifelse(test_predicted_prob_af >= threshold, 1, 0)
+
+# Confusion Matrix for Training Data
+cat("\nConfusion Matrix for Training Data:\n")
+train_confusion_matrix_af <- confusionMatrix(as.factor(train_predicted_class_af), as.factor(y_train_af))
+print(train_confusion_matrix_af)
+
+# Confusion Matrix for Test Data
+cat("\nConfusion Matrix for Test Data:\n")
+test_confusion_matrix_af <- confusionMatrix(as.factor(test_predicted_class_af), as.factor(y_test_af))
+print(test_confusion_matrix_af)
+
+# ROC Curve and AUC for Training Data
+train_roc_curve_af <- roc(y_train_af, train_predicted_prob_af)
+train_auc_af <- auc(train_roc_curve_af)
+cat("\nAUC for Training Data:", train_auc_af, "\n")
+plot(train_roc_curve_af, col = "blue", main = "ROC Curve for Training Data")
+
+# ROC Curve and AUC for Test Data
+test_roc_curve_af <- roc(y_test_af, test_predicted_prob_af)
+test_auc_af <- auc(test_roc_curve_af)
+cat("\nAUC for Test Data:", test_auc_af, "\n")
+plot(test_roc_curve_af, col = "red", main = "ROC Curve for Test Data")
+
+
+```
+
+#Q5 Naive Bayes
+
+```{r}
+
+# Load required libraries
+library(tidyverse)  # For data manipulation
+library(tidytext)   # For text data processing
+library(rsample)    # For splitting data
+library(e1071)      # For Naive Bayes
+library(pROC)       # For AUC calculation
+
+# Load your tokenized dataset (assumes `rrTokens` exists with columns: review_id, word, stars)
+# Example structure:
+# rrTokens <- data.frame(review_id = c("id1", "id2"), word = c("delicious", "bad"), stars = c(5, 1))
+
+# Define a function to preprocess data for each dictionary
+prepare_data <- function(tokens, dictionary, value_col = "tf_idf") {
+  tokens %>%
+    inner_join(get_sentiments(dictionary), by = "word") %>%  # Join with sentiment dictionary
+    pivot_wider(
+      id_cols = c(review_id, stars),
+      names_from = word,
+      values_from = !!sym(value_col),
+      values_fn = sum  # Summarize duplicates by summing tf_idf values
+    ) %>%
+    replace(is.na(.), 0) %>%                                # Replace NA with 0
+    filter(stars != 3) %>%                                  # Remove neutral reviews
+    mutate(hiLo = ifelse(stars <= 2, -1, 1)) %>%            # Create hiLo sentiment column
+    select(-stars)                                          # Remove stars (not needed for modeling)
+}
+
+# Preprocess data for each dictionary
+# Assuming `rrTokens` is already loaded and tokenized
+revDTM_sentiBing <- prepare_data(rrTokens, "bing", "tf_idf")
+revDTM_sentiNRC <- prepare_data(rrTokens, "nrc", "tf_idf")
+revDTM_sentiAFINN <- prepare_data(rrTokens, "afinn", "value")
+
+# Define a function to split data into training and testing sets
+split_data <- function(data) {
+  set.seed(123)  # Set seed for reproducibility
+  split <- initial_split(data, prop = 0.7)  # Split 70% training, 30% testing
+  list(
+    train = training(split),
+    test = testing(split)
+  )
+}
+
+# Split the data for Bing
+bing_data <- split_data(revDTM_sentiBing)
+
+# Assign training and testing data
+revDTM_sentiBing_trn <- bing_data$train
+revDTM_sentiBing_tst <- bing_data$test
+
+# ----------- Naive Bayes for Bing Dictionary ----------- #
+# Train Naive Bayes model
+nbModel1 <- naiveBayes(hiLo ~ ., data = revDTM_sentiBing_trn %>% select(-review_id))
+
+# Make predictions (raw probabilities) for training and test sets
+revSentiBing_NBpredTrn <- predict(nbModel1, revDTM_sentiBing_trn, type = "raw")
+revSentiBing_NBpredTst <- predict(nbModel1, revDTM_sentiBing_tst, type = "raw")
+
+# Calculate AUC for training set
+auc_trn <- auc(as.numeric(revDTM_sentiBing_trn$hiLo), revSentiBing_NBpredTrn[, 2])
+cat("AUC (Training, Bing):", auc_trn, "\n")
+
+# Calculate AUC for test set
+auc_tst <- auc(as.numeric(revDTM_sentiBing_tst$hiLo), revSentiBing_NBpredTst[, 2])
+cat("AUC (Test, Bing):", auc_tst, "\n")
+
+auc_bing_trn <- auc(as.numeric(revDTM_sentiBing_trn$hiLo), revSentiBing_NBpredTrn[, 2])
+auc_bing_tst <- auc(as.numeric(revDTM_sentiBing_tst$hiLo), revSentiBing_NBpredTst[, 2])
+cat("Bing - AUC (Train):", auc_bing_trn, "AUC (Test):", auc_bing_tst, "\n")
+
+roc_bing_trn <- roc(as.numeric(revDTM_sentiBing_trn$hiLo), revSentiBing_NBpredTrn[, 2])
+roc_bing_tst <- roc(as.numeric(revDTM_sentiBing_tst$hiLo), revSentiBing_NBpredTst[, 2])
+
+# ----------- Repeat for NRC Dictionary ----------- #
+# Split the data for NRC
+nrc_data <- split_data(revDTM_sentiNRC)
+revDTM_sentiNRC_trn <- nrc_data$train
+revDTM_sentiNRC_tst <- nrc_data$test
+
+# Train Naive Bayes model for NRC
+nbModel2 <- naiveBayes(hiLo ~ ., data = revDTM_sentiNRC_trn %>% select(-review_id))
+
+# Make predictions (raw probabilities) for training and test sets
+revSentiNRC_NBpredTrn <- predict(nbModel2, revDTM_sentiNRC_trn, type = "raw")
+revSentiNRC_NBpredTst <- predict(nbModel2, revDTM_sentiNRC_tst, type = "raw")
+
+# Calculate AUC for training set (NRC)
+auc_trn_nrc <- auc(as.numeric(revDTM_sentiNRC_trn$hiLo), revSentiNRC_NBpredTrn[, 2])
+cat("AUC (Training, NRC):", auc_trn_nrc, "\n")
+
+# Calculate AUC for test set (NRC)
+auc_tst_nrc <- auc(as.numeric(revDTM_sentiNRC_tst$hiLo), revSentiNRC_NBpredTst[, 2])
+cat("AUC (Test, NRC):", auc_tst_nrc, "\n")
+# Calculate AUC for training and test sets
+auc_nrc_trn <- auc(as.numeric(revDTM_sentiNRC_trn$hiLo), revSentiNRC_NBpredTrn[, 2])
+auc_nrc_tst <- auc(as.numeric(revDTM_sentiNRC_tst$hiLo), revSentiNRC_NBpredTst[, 2])
+cat("NRC - AUC (Train):", auc_nrc_trn, "AUC (Test):", auc_nrc_tst, "\n")
+
+# Plot ROC for NRC
+roc_nrc_trn <- roc(as.numeric(revDTM_sentiNRC_trn$hiLo), revSentiNRC_NBpredTrn[, 2])
+roc_nrc_tst <- roc(as.numeric(revDTM_sentiNRC_tst$hiLo), revSentiNRC_NBpredTst[, 2])
+
+# ----------- Repeat for AFINN Dictionary ----------- #
+# Split the data for AFINN
+afinn_data <- split_data(revDTM_sentiAFINN)
+revDTM_sentiAFINN_trn <- afinn_data$train
+revDTM_sentiAFINN_tst <- afinn_data$test
+
+# Train Naive Bayes model for AFINN
+nbModel3 <- naiveBayes(hiLo ~ ., data = revDTM_sentiAFINN_trn %>% select(-review_id))
+
+# Make predictions (raw probabilities) for training and test sets
+revSentiAFINN_NBpredTrn <- predict(nbModel3, revDTM_sentiAFINN_trn, type = "raw")
+revSentiAFINN_NBpredTst <- predict(nbModel3, revDTM_sentiAFINN_tst, type = "raw")
+
+# Calculate AUC for training set (AFINN)
+auc_trn_afinn <- auc(as.numeric(revDTM_sentiAFINN_trn$hiLo), revSentiAFINN_NBpredTrn[, 2])
+cat("AUC (Training, AFINN):", auc_trn_afinn, "\n")
+
+# Calculate AUC for test set (AFINN)
+auc_tst_afinn <- auc(as.numeric(revDTM_sentiAFINN_tst$hiLo), revSentiAFINN_NBpredTst[, 2])
+cat("AUC (Test, AFINN):", auc_tst_afinn, "\n")
+
+# Calculate AUC for training and test sets
+auc_afinn_trn <- auc(as.numeric(revDTM_sentiAFINN_trn$hiLo), revSentiAFINN_NBpredTrn[, 2])
+auc_afinn_tst <- auc(as.numeric(revDTM_sentiAFINN_tst$hiLo), revSentiAFINN_NBpredTst[, 2])
+cat("AFINN - AUC (Train):", auc_afinn_trn, "AUC (Test):", auc_afinn_tst, "\n")
+
+# Plot ROC for AFINN
+roc_afinn_trn <- roc(as.numeric(revDTM_sentiAFINN_trn$hiLo), revSentiAFINN_NBpredTrn[, 2])
+roc_afinn_tst <- roc(as.numeric(revDTM_sentiAFINN_tst$hiLo), revSentiAFINN_NBpredTst[, 2])
+# Plot ROC for all dictionaries
+plot.roc(roc_bing_tst, col = "blue", main = "ROC Curves for Naive Bayes (Test Data)", legacy.axes = TRUE)
+lines.roc(roc_nrc_tst, col = "red")
+lines.roc(roc_afinn_tst, col = "green")
+legend("bottomright", legend = c("Bing", "NRC", "AFINN"),
+       col = c("blue", "red", "green"), lwd = 2)
+#COMBINED SCORE
+# Compute sentiment scores for Bing dictionary
+bing_sentiment_scores <- rrTokens %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  group_by(review_id) %>%
+  summarise(bing_score = sum(ifelse(sentiment == "positive", 1, -1)))
+
+# Compute sentiment scores for NRC dictionary
+nrc_sentiment_scores <- rrTokens %>%
+  inner_join(get_sentiments("nrc"), by = "word") %>%
+  mutate(nrc_score = ifelse(sentiment %in% c('positive', 'joy', 'anticipation', 'trust'),
+                            1, ifelse(sentiment %in% c('anger', 'disgust', 'fear', 'sadness', 'negative'), -1, 0))) %>%
+  group_by(review_id) %>%
+  summarise(nrc_score = sum(nrc_score))
+
+# Compute sentiment scores for AFINN dictionary
+afinn_sentiment_scores <- rrTokens %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(review_id) %>%
+  summarise(afinn_score = sum(value))
+
+# Combine scores into a single dataset
+combined_sentiment_scores <- bing_sentiment_scores %>%
+  left_join(nrc_sentiment_scores, by = "review_id") %>%
+  left_join(afinn_sentiment_scores, by = "review_id")
+
+# Replace NA with 0 for reviews missing scores in any dictionary
+combined_sentiment_scores <- combined_sentiment_scores %>%
+  replace(., is.na(.), 0)
+
+# Create a target variable `hiLo` based on review stars
+combined_sentiment_scores <- combined_sentiment_scores %>%
+  left_join(revDTM %>% select(review_id, hiLo), by = "review_id") %>%
+  mutate(hiLo = as.factor(hiLo))
+set.seed(123)
+split <- initial_split(combined_sentiment_scores, 0.5)
+train_data <- training(split)
+test_data <- testing(split)
+
+# Train Naive Bayes model
+nb_model_combined <- naiveBayes(hiLo ~ bing_score + nrc_score + afinn_score, data = train_data)
+
+# Predictions on training data
+nb_cmb_predicted_train <- predict(nb_model_combined, train_data, type = "raw")
+
+# Predictions on testing data
+nb_cmb_predicted_test <- predict(nb_model_combined, test_data, type = "raw")
+
+# Convert probabilities to class labels
+train_labels <- ifelse(nb_cmb_predicted_train[, 2] > 0.5, 1, -1)
+test_labels <- ifelse(nb_cmb_predicted_test[, 2] > 0.5, 1, -1)
+
+# Confusion matrix for training
+conf_matrix_train <- confusionMatrix(as.factor(train_labels), as.factor(train_data$hiLo))
+cat("Confusion Matrix (Train):\n")
+print(conf_matrix_train)
+
+# Confusion matrix for testing
+conf_matrix_test <- confusionMatrix(as.factor(test_labels), as.factor(test_data$hiLo))
+cat("\nConfusion Matrix (Test):\n")
+print(conf_matrix_test)
+
+# Calculate AUC for training
+auc_train <- auc(as.numeric(train_data$hiLo), nb_cmb_predicted_train[, 2])
+cat("\nAUC (Training):", auc_train, "\n")
+
+# Calculate AUC for testing
+auc_test <- auc(as.numeric(test_data$hiLo), nb_cmb_predicted_test[, 2])
+cat("AUC (Testing):", auc_test, "\n")
+
+# ROC Curve
+roc_train <- roc(as.numeric(train_data$hiLo), nb_cmb_predicted_train[, 2])
+roc_test <- roc(as.numeric(test_data$hiLo), nb_cmb_predicted_test[, 2])
+
+# Plot ROC Curve
+plot(roc_train, col = "blue", main = "ROC Curve for Combined Sentiment Scores")
+plot(roc_test, col = "red", add = TRUE)
+legend("bottomright", legend = c("Training", "Testing"), col = c("blue", "red"), lty = 1)
+#Broader Term
+rWords<-rrTokens %>% group_by(word) %>% summarise(nr=n()) %>% arrange(desc(nr))
+
+#How many words are there
+length(rWords$word)
+
+top_n(rWords, 20)
+top_n(rWords, -20)
+
+#Suppose we want to remove words which occur in > 90% of reviews, and those which are in, for example, less than 30 reviews
+reduced_rWords<-rWords %>% filter(nr< 6000 & nr > 30)
+length(reduced_rWords$word)
+
+#reduce the rrTokens data to keep only the reduced set of words
+reduced_rrTokens <- left_join(reduced_rWords, rrTokens)
+
+#Now convert it to a DTM, where each row is for a review (document), and columns are the terms (words)
+revDTM  <- reduced_rrTokens %>%  pivot_wider(id_cols = c(review_id,stars), names_from = word, values_from = tf_idf)  %>% ungroup()
+
+#Check
+dim(revDTM)
+  #do the numberof columsnmatch the words -- we should also have the stars column and the review_id
+
+#create the dependent variable hiLo of good/bad reviews absed on stars, and remove the review with stars=3
+revDTM <- revDTM %>% filter(stars!=3) %>% mutate(hiLo=ifelse(stars<=2, -1, 1)) %>% select(-stars)
+
+#replace NAs with 0s
+revDTM<-revDTM %>% replace(., is.na(.), 0)
+
+revDTM$hiLo<-as.factor(revDTM$hiLo)
+
+revDTM_split<- initial_split(revDTM, 0.5)
+revDTM_trn<- training(revDTM_split)
+revDTM_tst<- testing(revDTM_split)
+
+# Naive Bayes Model Training and Prediction
+nbModel_broader <- naiveBayes(hiLo ~ ., data = revDTM_trn %>% select(-review_id))
+
+# Make predictions (raw probabilities) for training and test sets
+revBroader_NBpredTrn <- predict(nbModel_broader, revDTM_trn, type = "raw")
+revBroader_NBpredTst <- predict(nbModel_broader, revDTM_tst, type = "raw")
+
+# Calculate AUC for training set
+auc_trn_broader <- auc(as.numeric(revDTM_trn$hiLo), revBroader_NBpredTrn[, 2])
+cat("AUC (Training, Broader):", auc_trn_broader, "\n")
+
+# Calculate AUC for test set
+auc_tst_broader <- auc(as.numeric(revDTM_tst$hiLo), revBroader_NBpredTst[, 2])
+cat("AUC (Test, Broader):", auc_tst_broader, "\n")
+
+# ROC Curves
+roc_trn_broader <- roc(as.numeric(revDTM_trn$hiLo), revBroader_NBpredTrn[, 2])
+roc_tst_broader <- roc(as.numeric(revDTM_tst$hiLo), revBroader_NBpredTst[, 2])
+
+# Plot ROC Curves
+plot(roc_trn_broader, col = "blue", main = "ROC Curve - Training (Broader Terms)")
+plot(roc_tst_broader, col = "red", add = TRUE)
+legend("bottomright", legend = c("Training", "Test"), col = c("blue", "red"), lty = 1)
+
+# Print Performance Metrics
+cat("Performance Metrics for Broader Terms Model:\n")
+cat("Training AUC:", auc_trn_broader, "\n")
+cat("Test AUC:", auc_tst_broader, "\n")
+# Load necessary library
+library(caret)
+
+# Convert predictions to class labels
+predicted_class_trn <- ifelse(revBroader_NBpredTrn[, 2] > 0.5, 1, -1)
+predicted_class_tst <- ifelse(revBroader_NBpredTst[, 2] > 0.5, 1, -1)
+
+# Confusion Matrix for Training Set
+cm_trn <- confusionMatrix(as.factor(predicted_class_trn), as.factor(revDTM_trn$hiLo))
+cat("Confusion Matrix (Training):\n")
+print(cm_trn)
+
+# Confusion Matrix for Test Set
+cm_tst <- confusionMatrix(as.factor(predicted_class_tst), as.factor(revDTM_tst$hiLo))
+cat("\nConfusion Matrix (Test):\n")
+print(cm_tst)
+
+# Metrics for Training Set
+accuracy_trn <- cm_trn$overall['Accuracy']
+precision_trn <- cm_trn$byClass['Pos Pred Value']  # Precision
+recall_trn <- cm_trn$byClass['Sensitivity']        # Recall
+f1_score_trn <- 2 * ((precision_trn * recall_trn) / (precision_trn + recall_trn))
+
+cat("\nMetrics (Training Set):\n")
+cat("Accuracy:", accuracy_trn, "\n")
+cat("Precision:", precision_trn, "\n")
+cat("Recall:", recall_trn, "\n")
+cat("F1 Score:", f1_score_trn, "\n")
+
+# Metrics for Test Set
+accuracy_tst <- cm_tst$overall['Accuracy']
+precision_tst <- cm_tst$byClass['Pos Pred Value']  # Precision
+recall_tst <- cm_tst$byClass['Sensitivity']        # Recall
+f1_score_tst <- 2 * ((precision_tst * recall_tst) / (precision_tst + recall_tst))
+
+cat("\nMetrics (Test Set):\n")
+cat("Accuracy:", accuracy_tst, "\n")
+cat("Precision:", precision_tst, "\n")
+cat("Recall:", recall_tst, "\n")
+cat("F1 Score:", f1_score_tst, "\n")
+
+```
+
+#Q5 Random Forest
+
+```{r}
+
+
+
+```
